@@ -1,0 +1,102 @@
+---
+description: rules for building in tauri
+globs: 
+alwaysApply: false
+---
+When building features in a Tauri application using Rust ALWAYS USE Tauri 2.x, AND it's important to follow a clear and maintainable folder structure that aligns with Rust's best practices and Tauri's recommended patterns. While Tauri itself doesn't strictly enforce a specific folder structure, the following is a widely accepted and recommended approach:
+
+### Recommended Folder Structure:
+
+```
+my-tauri-app/
+├── src-tauri/
+│   ├── Cargo.toml
+│   ├── tauri.conf.json
+│   ├── build.rs
+│   └── src/
+│       ├── main.rs
+│       ├── commands/
+│       │   ├── mod.rs
+│       │   ├── feature_one.rs
+│       │   └── feature_two.rs
+│       ├── services/
+│       │   ├── mod.rs
+│       │   ├── file_service.rs
+│       │   └── http_service.rs
+│       ├── models/
+│       │   ├── mod.rs
+│       │   └── user.rs
+│       ├── utils/
+│       │   ├── mod.rs
+│       │   └── helpers.rs
+│       └── lib.rs (optional, if you have reusable library code)
+├── src/ (frontend code, e.g., React, Vue, Svelte, etc.)
+├── public/ (frontend static assets)
+├── tests/ (integration and end-to-end tests)
+└── docs/ (architecture, design decisions, changelogs, etc.)
+```
+
+---
+
+### Explanation of Each Folder:
+
+#### 1. `src-tauri/`
+- **Cargo.toml**: Defines Rust dependencies and metadata.
+- **tauri.conf.json**: Tauri configuration file (allowlists, window settings, etc.).
+- **build.rs**: Optional build script for custom build logic.
+- **src/**: Contains Rust backend logic.
+
+#### 2. `src-tauri/src/commands/`
+- Contains Tauri commands exposed to the frontend via `invoke`.
+- Each feature or logical grouping should have its own file.
+- `mod.rs` exports commands for easy import in `main.rs`.
+
+Example (`commands/mod.rs`):
+```rust
+pub mod feature_one;
+pub mod feature_two;
+```
+
+#### 3. `src-tauri/src/services/`
+- Contains business logic, external API calls, file system interactions, etc.
+- Each service should have a single responsibility and clear boundaries.
+
+#### 4. `src-tauri/src/models/`
+- Contains data structures, DTOs, and domain models.
+
+#### 5. `src-tauri/src/utils/`
+- Contains helper functions, common utilities, and shared logic.
+
+#### 6. `src-tauri/src/main.rs`
+- Entry point for your Tauri backend.
+- Registers commands and initializes the Tauri application.
+
+Example (`main.rs`):
+```rust
+mod commands;
+use commands::{feature_one::*, feature_two::*};
+
+fn main() {
+    tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            command_one,
+            command_two,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+```
+
+---
+
+### Best Practices & Principles:
+
+- **Single Responsibility**: Each module/file should have a clear, singular purpose.
+- **Separation of Concerns**: Clearly separate commands (frontend interaction), services (business logic), and models (data structures).
+- **Dependency Inversion**: Rely on abstractions (traits) rather than concrete implementations to improve testability and maintainability.
+- **Documentation**: Include markdown files in the `/docs` folder to explain complex features, architecture, and design decisions.
+- **Testing**: Include unit tests within each module and integration tests in a dedicated `/tests` folder.
+
+---
+
+Following this structure and these principles will help you build maintainable, scalable, and clean Tauri applications.
