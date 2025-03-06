@@ -3,7 +3,6 @@
 import { useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FileExplorer } from "./file-explorer";
 import { FolderIcon } from "lucide-react";
 
 // Global app error handler
@@ -11,11 +10,11 @@ const logError = (message: string, error: any) => {
   console.error(`${message}:`, error);
 };
 
-interface DirectorySelectorProps {
+interface FolderSelectorProps {
   onDirectorySelect?: (path: string) => void;
 }
 
-export function DirectorySelector({ onDirectorySelect }: DirectorySelectorProps = {}) {
+export function FolderSelector({ onDirectorySelect }: FolderSelectorProps = {}) {
   const [selectedDir, setSelectedDir] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -61,40 +60,34 @@ export function DirectorySelector({ onDirectorySelect }: DirectorySelectorProps 
   }, [onDirectorySelect]);
 
   return (
-    <div className="flex flex-col space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Directory Selection</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col space-y-4">
-            <Button 
-              onClick={selectDirectory}
-              disabled={isLoading}
-              className="w-full md:w-auto"
-            >
-              <FolderIcon className="mr-2 h-4 w-4" />
-              {isLoading ? 'Selecting...' : 'Select Folder'}
-            </Button>
-            
-            {selectedDir && (
-              <div className="p-3 bg-gray-100 rounded border border-gray-300 break-all">
-                <strong>Selected:</strong> {selectedDir}
-              </div>
-            )}
-            
-            {error && (
-              <div className="p-3 bg-red-100 text-red-800 rounded border border-red-300">
-                {error}
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-      
-      {selectedDir && (
-        <FileExplorer directoryPath={selectedDir} />
-      )}
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>Directory Selection</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col space-y-4">
+          <Button 
+            onClick={selectDirectory}
+            disabled={isLoading}
+            className="w-full md:w-auto"
+          >
+            <FolderIcon className="mr-2 h-4 w-4" />
+            {isLoading ? 'Selecting...' : 'Select Folder'}
+          </Button>
+          
+          {selectedDir && (
+            <div className="p-3 bg-gray-100 rounded border border-gray-300 break-all">
+              <strong>Selected:</strong> {selectedDir}
+            </div>
+          )}
+          
+          {error && (
+            <div className="p-3 bg-red-100 text-red-800 rounded border border-red-300">
+              {error}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 } 

@@ -3,6 +3,7 @@ pub mod services;
 pub mod utils;
 
 use commands::dialog_commands::{select_directory_dialog, list_directory_files};
+use commands::file_watcher_commands::{start_watching_directory, stop_watching_directory, list_active_watchers, trigger_test_event, FileWatcherState};
 use services::file_service::FileService;
 use utils::panic_handler::setup_panic_handler;
 use std::fs::File;
@@ -45,7 +46,11 @@ pub fn run() {
     log_to_file("Setting up invoke handler");
     let builder = builder.invoke_handler(tauri::generate_handler![
         select_directory_dialog,
-        list_directory_files
+        list_directory_files,
+        start_watching_directory,
+        stop_watching_directory,
+        list_active_watchers,
+        trigger_test_event
     ]);
     
     log_to_file("Setting up app");
@@ -58,6 +63,11 @@ pub fn run() {
             log_to_file(&message);
             eprintln!("{}", message);
         }));
+        
+        // Initialize the file watcher state
+        let app_handle = app.handle().clone();
+        app.manage(FileWatcherState::new(app_handle.clone()));
+        log_to_file("File watcher state initialized");
         
         // Example usage of FileService
         let file_service = FileService::new();
