@@ -23,4 +23,4 @@ pub fn setup_panic_handler() {
         error!("Location: {}", location);
         error!("Backtrace:\n{}", backtrace);
     }));
-} 
+}

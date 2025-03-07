@@ -15,8 +15,8 @@
       {
         "label": "main",
         "title": "vibede",
-        "width": 800,
-        "height": 600,
+        "width": 1200,
+        "height": 800,
         "resizable": true,
         "fullscreen": false,
         "visible": true,
@@ -25,7 +25,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' http://localhost:* ws://localhost:*; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';"
+      "csp": "default-src 'self' http://localhost:* ws://localhost:* https://*.auth0.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* ws://localhost:* https://*.auth0.com;",
+      "capabilities": ["default", "auth"]
     }
   },
   "bundle": {
@@ -38,5 +39,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["vibede"]
+      }
+    }
   }
 }

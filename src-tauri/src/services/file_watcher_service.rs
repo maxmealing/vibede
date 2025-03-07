@@ -42,7 +42,12 @@ impl FileWatcherService {
     }
 
     /// Starts watching a directory for changes
-    pub async fn watch_directory<P: AsRef<Path>>(&self, path: P, watch_id: String, recursive: bool) -> Result<(), String> {
+    pub async fn watch_directory<P: AsRef<Path>>(
+        &self,
+        path: P,
+        watch_id: String,
+        recursive: bool,
+    ) -> Result<(), String> {
         if self.app_handle.is_none() {
             return Err("App handle not set. Call set_app_handle first.".to_string());
         }
@@ -62,12 +67,12 @@ impl FileWatcherService {
 
         // Create a channel for the watcher to send events
         let (tx, rx) = mpsc::channel(100);
-        
+
         // Clone necessary data for the async task
         let app_handle = self.app_handle.clone().unwrap();
         let watch_id_clone = watch_id.clone();
         let path_clone = path.clone();
-        
+
         // Spawn a task to handle events
         tokio::spawn(async move {
             Self::handle_events(rx, app_handle, watch_id_clone, path_clone).await;
@@ -129,7 +134,7 @@ impl FileWatcherService {
     ) -> Result<RecommendedWatcher, String> {
         // Create a new watcher with default config
         let config = Config::default();
-        
+
         // Create the event handler
         let event_handler = move |res: Result<Event, notify::Error>| {
             let _ = tx.blocking_send(res);
@@ -202,4 +207,4 @@ impl FileWatcherService {
             }
         }
     }
-} 
+}

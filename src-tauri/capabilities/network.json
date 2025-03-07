@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "network",
+  "description": "Capability for network access to Auth0 and local development server",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "linux",
+    "macOS",
+    "windows"
+  ],
+  "permissions": [
+    "core:default",
+    "http:allow-fetch"
+  ],
+  "allowHttp": {
+    "urls": [
+      "http://localhost:3000/*", 
+      "https://*.auth0.com/*"
+    ]
+  }
+} 
