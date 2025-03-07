@@ -49,29 +49,16 @@ pub async fn agent_chain_invoke(
     Ok(response.content)
 }
 
-/// Create a conversation response with history
+/// Generate tests for provided code
 #[tauri::command]
-pub async fn agent_conversation_invoke(
-    system_prompt: String,
-    user_input: String,
-    history: Vec<ChatMessage>,
+pub async fn generate_tests(
+    code: String,
+    language: String,
+    test_framework: Option<String>,
     agent_service: State<'_, AgentService>,
 ) -> Result<String, String> {
-    // Convert ChatMessage to (String, String) for human and AI messages
-    let history_tuples: Vec<(String, String)> = history
-        .chunks(2)
-        .filter_map(|chunk| {
-            if chunk.len() == 2 && chunk[0].role == "user" && chunk[1].role == "assistant" {
-                Some((chunk[0].content.clone(), chunk[1].content.clone()))
-            } else {
-                None
-            }
-        })
-        .collect();
-
     let response = agent_service
-        .create_conversation_response(system_prompt, user_input, history_tuples)
+        .generate_tests(code, language, test_framework)
         .await?;
-    
     Ok(response.content)
 } 

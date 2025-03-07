@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FolderIcon } from "lucide-react";
@@ -12,12 +12,20 @@ const logError = (message: string, error: any) => {
 
 interface FolderSelectorProps {
   onDirectorySelect?: (path: string) => void;
+  initialDirectory?: string;
 }
 
-export function FolderSelector({ onDirectorySelect }: FolderSelectorProps = {}) {
-  const [selectedDir, setSelectedDir] = useState<string | null>(null);
+export function FolderSelector({ onDirectorySelect, initialDirectory }: FolderSelectorProps = {}) {
+  const [selectedDir, setSelectedDir] = useState<string | null>(initialDirectory || null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+
+  // Update selected directory when initialDirectory prop changes
+  useEffect(() => {
+    if (initialDirectory) {
+      setSelectedDir(initialDirectory);
+    }
+  }, [initialDirectory]);
 
   // Function to select a directory
   const selectDirectory = useCallback(async () => {
@@ -72,7 +80,7 @@ export function FolderSelector({ onDirectorySelect }: FolderSelectorProps = {}) 
             className="w-full md:w-auto"
           >
             <FolderIcon className="mr-2 h-4 w-4" />
-            {isLoading ? 'Selecting...' : 'Select Folder'}
+            {isLoading ? 'Selecting...' : selectedDir ? 'Change Folder' : 'Select Folder'}
           </Button>
           
           {selectedDir && (

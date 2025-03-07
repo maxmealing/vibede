@@ -5,7 +5,8 @@ pub mod utils;
 use commands::dialog_commands::{select_directory_dialog, list_directory_files};
 use commands::file_watcher_commands::{start_watching_directory, stop_watching_directory, list_active_watchers, trigger_test_event, FileWatcherState};
 use commands::auth_commands::{initialize_auth0, login, logout, get_auth_state, is_authenticated, handle_auth_callback, register_uri_scheme_handler, manual_authenticate, set_test_pkce_params, get_test_pkce_params};
-use commands::agent_commands::{initialize_agent, is_agent_initialized, agent_simple_invoke, agent_chain_invoke, agent_conversation_invoke};
+use commands::agent_commands::{initialize_agent, is_agent_initialized, agent_simple_invoke, agent_chain_invoke, generate_tests};
+use commands::file_analysis_commands::{find_test_files, generate_and_write_test};
 use services::file_service::FileService;
 use services::auth_service::{AuthService, AuthStateStore};
 use services::AgentService;
@@ -97,8 +98,12 @@ pub fn run() {
         initialize_agent,
         is_agent_initialized,
         agent_simple_invoke,
-        agent_chain_invoke, 
-        agent_conversation_invoke
+        agent_chain_invoke,
+        generate_tests,
+        
+        // File analysis commands
+        find_test_files,
+        generate_and_write_test,
     ]);
     
     log_to_file("Setting up app");

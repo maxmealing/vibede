@@ -31,6 +31,7 @@ tauri-plugin-opener = "2.0.0"
 notify = "6.1.1"
 tokio = { version = "1.36.0", features = ["full"] }
 uuid = { version = "1.7.0", features = ["v4", "serde"] }
+walkdir = "2.4.0"
 # Auth0 dependencies
 url = "2.4.1"
 urlencoding = "2.1.3"

@@ -130,6 +130,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]

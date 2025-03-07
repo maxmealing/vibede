@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FilterToggles } from "@/components/FileWatcherFilters/FilterToggles";
@@ -10,27 +10,126 @@ import { RepoType } from "@/types/fileWatcher";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
 import Link from "next/link";
+import { invoke } from "@tauri-apps/api/core";
 
 export default function SettingsPage() {
   const [isFilterExpanded, setIsFilterExpanded] = useState<boolean>(true);
   const [detectedRepoType, setDetectedRepoType] = useState<RepoType | undefined>(undefined);
+  const [anthropicApiKey, setAnthropicApiKey] = useState<string>("");
+  const [isApiKeyInitialized, setIsApiKeyInitialized] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   
   const filterHooks = useFileFilters();
+
+  // Check if the agent service is already initialized
+  useEffect(() => {
+    const checkInitialization = async () => {
+      try {
+        const initialized = await invoke("is_agent_initialized") as boolean;
+        setIsApiKeyInitialized(initialized);
+        
+        // If not initialized but we have a saved API key, try to initialize
+        if (!initialized) {
+          const savedApiKey = localStorage.getItem("anthropic_api_key");
+          if (savedApiKey) {
+            setAnthropicApiKey(savedApiKey);
+            try {
+              await invoke("initialize_agent", { apiKey: savedApiKey });
+              setIsApiKeyInitialized(true);
+              console.log("Agent initialized with saved API key");
+            } catch (error) {
+              console.error("Failed to initialize agent with saved API key:", error);
+              setSaveError(`Failed to initialize with saved API key: ${error}`);
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Failed to check agent initialization:", error);
+      }
+    };
+
+    checkInitialization();
+  }, []);
+
+  // Save the Anthropic API key
+  const saveAnthropicApiKey = async () => {
+    if (!anthropicApiKey.trim()) {
+      setSaveError("Please enter an API key");
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveSuccess(false);
+    setSaveError(null);
+
+    try {
+      await invoke("initialize_agent", { apiKey: anthropicApiKey });
+      setIsApiKeyInitialized(true);
+      setSaveSuccess(true);
+      
+      // Store the API key in localStorage for persistence
+      localStorage.setItem("anthropic_api_key", anthropicApiKey);
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => {
+        setSaveSuccess(false);
+      }, 3000);
+    } catch (error) {
+      console.error("Failed to initialize agent:", error);
+      setSaveError(`Failed to initialize: ${error}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Load the API key from localStorage on component mount
+  useEffect(() => {
+    const savedApiKey = localStorage.getItem("anthropic_api_key");
+    if (savedApiKey) {
+      setAnthropicApiKey(savedApiKey);
+      
+      // If we have a saved API key but the agent is not initialized, initialize it
+      if (!isApiKeyInitialized) {
+        const initializeAgent = async () => {
+          try {
+            await invoke("initialize_agent", { apiKey: savedApiKey });
+            setIsApiKeyInitialized(true);
+          } catch (error) {
+            console.error("Failed to initialize agent with saved API key:", error);
+          }
+        };
+        
+        initializeAgent();
+      }
+    }
+  }, [isApiKeyInitialized]);
   
   return (
     <div className="container mx-auto py-6 px-4">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold">Settings</h1>
-        <Button variant="outline" asChild>
-          <Link href="/">Back to Home</Link>
-        </Button>
+        <div className="flex items-center gap-4">
+          <Button variant="outline" asChild>
+            <Link href="/">Home</Link>
+          </Button>
+          <Button variant="outline" asChild>
+            <Link href="/file-watcher">File Watcher</Link>
+          </Button>
+          <Button variant="outline" asChild>
+            <Link href="/agents">AI Agents</Link>
+          </Button>
+        </div>
       </div>
       
       <Tabs defaultValue="filters" className="w-full">
         <TabsList className="mb-4">
           <TabsTrigger value="filters">File Filters</TabsTrigger>
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
+          <TabsTrigger value="api-keys">API Keys</TabsTrigger>
           <TabsTrigger value="advanced">Advanced</TabsTrigger>
         </TabsList>
         
@@ -144,6 +243,79 @@ export default function SettingsPage() {
                 <div className="flex items-center justify-between">
                   <Label htmlFor="compact-view">Compact View</Label>
                   <Switch id="compact-view" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="api-keys" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>API Keys</CardTitle>
+              <CardDescription>
+                Configure API keys for external services
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-6">
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="anthropic-api-key" className="text-base font-medium">
+                      Anthropic API Key
+                    </Label>
+                    <p className="text-sm text-gray-500 mb-2">
+                      Required for AI test generation functionality
+                    </p>
+                    <div className="flex gap-2">
+                      <Input
+                        id="anthropic-api-key"
+                        type="password"
+                        value={anthropicApiKey}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAnthropicApiKey(e.target.value)}
+                        placeholder="Enter your Anthropic API key"
+                        className="flex-1"
+                      />
+                      <Button 
+                        onClick={saveAnthropicApiKey}
+                        disabled={isSaving || !anthropicApiKey.trim()}
+                      >
+                        {isSaving ? "Saving..." : "Save"}
+                      </Button>
+                    </div>
+                    {saveSuccess && (
+                      <p className="text-sm text-green-600 mt-2">
+                        API key saved successfully!
+                      </p>
+                    )}
+                    {saveError && (
+                      <p className="text-sm text-red-600 mt-2">
+                        {saveError}
+                      </p>
+                    )}
+                    {isApiKeyInitialized && (
+                      <p className="text-sm text-green-600 mt-2">
+                        Test generation is ready to use
+                      </p>
+                    )}
+                  </div>
+                  <div className="bg-blue-50 p-4 rounded-md border border-blue-200">
+                    <h3 className="text-sm font-medium text-blue-800 mb-2">About API Keys</h3>
+                    <p className="text-sm text-blue-700">
+                      Your API keys are stored locally on your device and are only used to authenticate with the respective services.
+                      We never transmit your keys to our servers.
+                    </p>
+                    <p className="text-sm text-blue-700 mt-2">
+                      <a 
+                        href="https://console.anthropic.com/settings/keys" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="underline"
+                      >
+                        Get an Anthropic API key
+                      </a>
+                    </p>
+                  </div>
                 </div>
               </div>
             </CardContent>
