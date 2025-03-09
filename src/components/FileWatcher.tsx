@@ -33,9 +33,9 @@ interface WatcherInfo {
 type WatcherTuple = [string, string];
 
 interface FileWatcherProps {
-  // Pre-selected directory path
+  // Pre-selected project path
   initialDirectoryPath?: string;
-  // Optional callback when a directory is selected
+  // Optional callback when a project is selected
   onDirectorySelect?: (path: string) => void;
 }
 

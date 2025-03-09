@@ -13,6 +13,8 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import Link from "next/link";
 import { invoke } from "@tauri-apps/api/core";
+import { BaseDirectorySetting } from "@/components/BaseDirectorySetting";
+import { toast } from "sonner";
 
 export default function SettingsPage() {
   const [isFilterExpanded, setIsFilterExpanded] = useState<boolean>(true);
@@ -25,25 +27,25 @@ export default function SettingsPage() {
   
   const filterHooks = useFileFilters();
 
-  // Check if the agent service is already initialized
+  // Check if agent is already initialized when component mounts
   useEffect(() => {
     const checkInitialization = async () => {
       try {
         const initialized = await invoke("is_agent_initialized") as boolean;
         setIsApiKeyInitialized(initialized);
         
-        // If not initialized but we have a saved API key, try to initialize
-        if (!initialized) {
+        // If initialized but no key in localStorage, try to save it
+        if (initialized) {
           const savedApiKey = localStorage.getItem("anthropic_api_key");
           if (savedApiKey) {
             setAnthropicApiKey(savedApiKey);
+          } else {
+            // This is a case where the agent is initialized but we don't have the key in storage
             try {
               await invoke("initialize_agent", { apiKey: savedApiKey });
               setIsApiKeyInitialized(true);
-              console.log("Agent initialized with saved API key");
             } catch (error) {
-              console.error("Failed to initialize agent with saved API key:", error);
-              setSaveError(`Failed to initialize with saved API key: ${error}`);
+              console.error("Failed to reinitialize agent:", error);
             }
           }
         }
@@ -51,36 +53,34 @@ export default function SettingsPage() {
         console.error("Failed to check agent initialization:", error);
       }
     };
-
+    
     checkInitialization();
   }, []);
-
-  // Save the Anthropic API key
+  
+  // Save the API key to localStorage and initialize the agent
   const saveAnthropicApiKey = async () => {
     if (!anthropicApiKey.trim()) {
-      setSaveError("Please enter an API key");
       return;
     }
-
+    
     setIsSaving(true);
-    setSaveSuccess(false);
-    setSaveError(null);
-
+    
     try {
-      await invoke("initialize_agent", { apiKey: anthropicApiKey });
-      setIsApiKeyInitialized(true);
-      setSaveSuccess(true);
-      
-      // Store the API key in localStorage for persistence
+      // Save API key to localStorage
       localStorage.setItem("anthropic_api_key", anthropicApiKey);
       
-      // Clear success message after 3 seconds
-      setTimeout(() => {
-        setSaveSuccess(false);
-      }, 3000);
+      // Initialize the agent with the API key
+      try {
+        await invoke("initialize_agent", { apiKey: anthropicApiKey });
+        setIsApiKeyInitialized(true);
+        toast.success("API key saved and agent initialized successfully!");
+      } catch (error) {
+        console.error("Failed to initialize agent:", error);
+        toast.error("Failed to initialize agent. Please check your API key.");
+      }
     } catch (error) {
-      console.error("Failed to initialize agent:", error);
-      setSaveError(`Failed to initialize: ${error}`);
+      console.error("Failed to save API key:", error);
+      toast.error("Failed to save API key.");
     } finally {
       setIsSaving(false);
     }
@@ -108,6 +108,13 @@ export default function SettingsPage() {
     }
   }, [isApiKeyInitialized]);
   
+  // Handle base directory change
+  const handleBaseDirectoryChange = (path: string) => {
+    console.log("Base directory changed in settings:", path);
+    // The BaseDirectorySetting component already saves to localStorage
+    // This is just for additional actions if needed
+  };
+  
   return (
     <div className="container mx-auto py-6 px-4">
       <div className="flex justify-between items-center mb-6">
@@ -130,6 +137,7 @@ export default function SettingsPage() {
           <TabsTrigger value="filters">File Filters</TabsTrigger>
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
           <TabsTrigger value="api-keys">API Keys</TabsTrigger>
+          <TabsTrigger value="directories">Directories</TabsTrigger>
           <TabsTrigger value="advanced">Advanced</TabsTrigger>
         </TabsList>
         
@@ -322,29 +330,27 @@ export default function SettingsPage() {
           </Card>
         </TabsContent>
         
+        <TabsContent value="directories" className="space-y-4">
+          <BaseDirectorySetting onDirectoryChange={handleBaseDirectoryChange} />
+        </TabsContent>
+        
         <TabsContent value="advanced" className="space-y-4">
           <Card>
             <CardHeader>
               <CardTitle>Advanced Settings</CardTitle>
               <CardDescription>
-                Configure advanced options for the file watcher
+                Configure advanced application settings
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <div>
-                    <Label htmlFor="debug-mode" className="block">Debug Mode</Label>
-                    <p className="text-sm text-gray-500">Show additional debugging information</p>
-                  </div>
+                  <Label htmlFor="debug-mode">Debug Mode</Label>
                   <Switch id="debug-mode" />
                 </div>
                 <div className="flex items-center justify-between">
-                  <div>
-                    <Label htmlFor="auto-refresh" className="block">Auto Refresh</Label>
-                    <p className="text-sm text-gray-500">Automatically refresh the file watcher</p>
-                  </div>
-                  <Switch id="auto-refresh" />
+                  <Label htmlFor="auto-update">Automatic Updates</Label>
+                  <Switch id="auto-update" defaultChecked />
                 </div>
               </div>
             </CardContent>

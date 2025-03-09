@@ -5,31 +5,38 @@
 
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { FolderSelector } from "../components/folder-selector";
+import { ProjectSelector } from "../../components/ProjectSelector";
 import FileWatcher from "../../components/FileWatcher";
 import { Button } from "../../components/ui/button";
 import Link from "next/link";
 import { useAuthContext } from "../../components/auth/AuthProvider";
 
 export default function FileWatcherPage() {
-  const [selectedDirectory, setSelectedDirectory] = useState<string>("");
+  const [selectedProject, setSelectedProject] = useState<string>("");
   const { isAuthenticated } = useAuthContext();
 
-  // Load saved directory on component mount
+  // Load saved project on component mount
   useEffect(() => {
-    const savedWatcherDirectory = localStorage.getItem("watcherDirectory");
-    if (savedWatcherDirectory) {
-      setSelectedDirectory(savedWatcherDirectory);
+    const savedWatcherProject = localStorage.getItem("watcherProject");
+    if (savedWatcherProject) {
+      setSelectedProject(savedWatcherProject);
     }
   }, []);
 
-  // Function to handle directory selection
-  const handleDirectorySelect = (path: string) => {
-    console.log("Directory selected:", path);
-    setSelectedDirectory(path);
+  // Function to handle project selection
+  const handleProjectSelect = (path: string) => {
+    console.log("Project selected in file-watcher:", path);
     
-    // Save the selected directory to localStorage
-    localStorage.setItem("watcherDirectory", path);
+    // Validate the path
+    if (!path) {
+      console.error("Invalid project path:", path);
+      return;
+    }
+    
+    setSelectedProject(path);
+    
+    // Save the selected project to localStorage
+    localStorage.setItem("watcherProject", path);
   };
 
   return (
@@ -47,11 +54,11 @@ export default function FileWatcherPage() {
       </div>
       
       <div className="grid grid-cols-1 gap-6">
-        <FolderSelector onDirectorySelect={handleDirectorySelect} initialDirectory={selectedDirectory} />
+        <ProjectSelector onProjectSelect={handleProjectSelect} initialProject={selectedProject} />
         <div className="bg-white rounded-lg shadow">
           <FileWatcher 
-            initialDirectoryPath={selectedDirectory}
-            onDirectorySelect={handleDirectorySelect}
+            initialDirectoryPath={selectedProject}
+            onDirectorySelect={handleProjectSelect}
           />
         </div>
       </div>

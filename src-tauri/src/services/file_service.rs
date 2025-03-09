@@ -356,45 +356,61 @@ impl FileService {
             "java" => format!("{}Test.java", file_stem),
             "cs" => format!("{}Tests.cs", file_stem),
             "rb" => format!("{}_spec.rb", file_stem),
-            "rs" => format!("{}.rs", file_stem), // Rust tests are typically in the same file or in a tests module
-            _ => return Err(format!("Unsupported file extension: {}", extension))
+            "rs" => format!("{}_test.rs", file_stem), // Rust tests typically use _test suffix in tests directory
+            _ => format!("{}.test.{}", file_stem, extension) // Default to .test.ext pattern
         };
         
-        // For Rust, we need special handling since tests are often in the same file or in a tests module
-        if extension == "rs" {
-            // Check if there's already a tests directory at the module level
-            let rust_test_dir = if parent.is_empty() {
-                "tests".to_string()
-            } else {
-                format!("{}/tests", parent)
-            };
-            
-            return Ok(format!("{}/{}", rust_test_dir, test_file_name));
-        }
-        
-        // Check if there's a "tests" or "test" directory at the same level
-        let test_dir_path = if parent.is_empty() {
-            // If the source file is at the root, create a "tests" directory
-            "tests".to_string()
-        } else {
-            // Check if there's already a test directory
-            let parent_path = Path::new(&parent);
-            let has_test_dir = parent_path.join("tests").exists() || parent_path.join("test").exists();
-            
-            if has_test_dir {
-                // Use the existing test directory
-                if parent_path.join("tests").exists() {
-                    format!("{}/tests", parent)
+        // Language-specific test directory handling
+        match extension {
+            "rs" => {
+                // Rust tests are typically in a tests directory at the module level
+                let rust_test_dir = if parent.is_empty() {
+                    "tests".to_string()
                 } else {
-                    format!("{}/test", parent)
-                }
-            } else {
-                // Create a tests directory at the same level
-                format!("{}/tests", parent)
+                    format!("{}/tests", parent)
+                };
+                
+                Ok(format!("{}/{}", rust_test_dir, test_file_name))
+            },
+            "py" => {
+                // Python tests might be in tests folder or in the same directory
+                let test_dir = if parent.is_empty() {
+                    "tests".to_string()
+                } else if parent.ends_with("/tests") || parent.ends_with("/test") {
+                    // Already in a test directory
+                    parent
+                } else {
+                    format!("{}/tests", parent)
+                };
+                
+                Ok(format!("{}/{}", test_dir, test_file_name))
+            },
+            "ts" | "js" | "tsx" | "jsx" => {
+                // JavaScript/TypeScript tests often follow the pattern of being in the same directory or in a __tests__ directory
+                let test_dir = if parent.is_empty() {
+                    "__tests__".to_string()
+                } else if parent.contains("/__tests__") || parent.contains("/tests") || parent.contains("/test") {
+                    // Already in a test directory
+                    parent
+                } else {
+                    format!("{}/__tests__", parent)
+                };
+                
+                Ok(format!("{}/{}", test_dir, test_file_name))
+            },
+            _ => {
+                // Generic approach for other languages
+                let test_dir = if parent.is_empty() {
+                    "tests".to_string()
+                } else if parent.ends_with("/tests") || parent.ends_with("/test") {
+                    // Already in a test directory
+                    parent
+                } else {
+                    format!("{}/tests", parent)
+                };
+                
+                Ok(format!("{}/{}", test_dir, test_file_name))
             }
-        };
-        
-        // Combine the test directory and test file name
-        Ok(format!("{}/{}", test_dir_path, test_file_name))
+        }
     }
 }

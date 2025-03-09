@@ -3,772 +3,299 @@
 // Custom reference declarations for Tauri modules
 /// <reference path="../types/tauri.d.ts" />
 
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect } from "react";
 import { Button } from "../components/ui/button";
 import Link from "next/link";
 import { AuthButton } from "../components/auth/AuthButton";
 import { ManualAuthForm } from "../components/auth/ManualAuthForm";
 import { useAuthContext } from "../components/auth/AuthProvider";
-import { FolderSelector } from "./components/folder-selector";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
+import { Loader2, AlertCircle, FolderIcon, CheckCircleIcon, XCircleIcon, RefreshCwIcon, CodeIcon } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { Loader2, CheckCircle, AlertCircle } from "lucide-react";
 import { Badge } from "../components/ui/badge";
-import { Input } from "../components/ui/input";
-import { initializeAgentFromStorage, detectLanguageFromFile, getTestingRecommendations, checkPackageInstallation } from "../lib/agent-utils";
-import React from "react";
-import _ from "lodash";
+import { Label } from "../components/ui/label";
+// Import sonner for toast notifications
+import { Toaster, toast } from "sonner";
+import { ProjectSelector } from "../components/ProjectSelector";
 
-// Define types for file analysis
-interface FileAnalysisResult {
-  [sourceFile: string]: string | null; // Maps source file to test file (null if no test exists)
+// Import our custom hooks
+import { useProjectState } from "../hooks/useProjectState";
+import { useLanguageState } from "../hooks/useLanguageState";
+import { useAnalysisState } from "../hooks/useAnalysisState";
+import { useTestGenerationState } from "../hooks/useTestGenerationState";
+
+// Import our Tauri API wrapper
+import { selectDirectory } from "../lib/api/tauri";
+import { invoke } from "@tauri-apps/api/core";
+
+// Replace Progress component with a div
+const Progress: React.FC<{ value: number }> = ({ value }) => (
+  <div className="bg-primary/20 relative h-2 w-full overflow-hidden rounded-full">
+    <div 
+      className="bg-primary h-full w-full flex-1 transition-all" 
+      style={{ transform: `translateX(-${100 - (value || 0)}%)` }}
+    />
+  </div>
+);
+
+// Replace Checkbox component with a div
+interface CheckboxProps {
+  id: string;
+  checked?: boolean;
+  onCheckedChange?: (checked: boolean) => void;
+  disabled?: boolean;
 }
 
-interface FilesByType {
-  components: Array<{ path: string; hasTest: boolean; testPath: string | null }>;
-  services: Array<{ path: string; hasTest: boolean; testPath: string | null }>;
-  utils: Array<{ path: string; hasTest: boolean; testPath: string | null }>;
+const Checkbox: React.FC<CheckboxProps> = ({ 
+  id, 
+  checked, 
+  onCheckedChange, 
+  disabled 
+}) => (
+  <div 
+    className={`h-4 w-4 rounded-sm border ${checked ? 'bg-primary border-primary' : 'border-primary'} ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+    onClick={() => !disabled && onCheckedChange && onCheckedChange(!checked)}
+  >
+    {checked && (
+      <div className="flex items-center justify-center text-primary-foreground">
+        <CheckCircleIcon className="h-3 w-3" />
+      </div>
+    )}
+  </div>
+);
+
+// Replace ScrollArea component with a div
+interface ScrollAreaProps {
+  className?: string;
+  children: React.ReactNode;
 }
+
+const ScrollArea: React.FC<ScrollAreaProps> = ({ className, children }) => (
+  <div className={`overflow-auto ${className || ''}`}>
+    {children}
+  </div>
+);
 
 export default function HomePage() {
-  const [selectedDirectory, setSelectedDirectory] = useState<string>("");
   const [showManualAuth, setShowManualAuth] = useState(false);
-  const { isLoading } = useAuthContext();
-  const [filesByType, setFilesByType] = useState<FilesByType>({
-    components: [],
-    services: [],
-    utils: []
-  });
-  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [stats, setStats] = useState({ total: 0, withTests: 0, withoutTests: 0 });
-  const [isGeneratingTests, setIsGeneratingTests] = useState(false);
-  const [testGenerationResults, setTestGenerationResults] = useState<Array<{
-    file: string;
-    success: boolean;
-    testPath?: string;
-    error?: string;
-  }>>([]);
-  const [showResults, setShowResults] = useState(false);
-  const [detectedLanguages, setDetectedLanguages] = useState<Map<string, {
-    framework: string;
-    installCommand: string;
-    description: string;
-    installed?: boolean;
-  }>>(new Map());
-  const [packageCheckStatus, setPackageCheckStatus] = useState<'idle' | 'checking' | 'complete'>('idle');
-  const [isAgentInitialized, setIsAgentInitialized] = useState(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
-  const [packageWatcherId, setPackageWatcherId] = useState<string | null>(null);
-  const [recentlyInstalledPackages, setRecentlyInstalledPackages] = useState<Set<string>>(new Set());
-
-  // Create a ref to track the current watcher ID and cleanup function
-  const watcherRef = React.useRef<{
-    id: string | null;
-    cleanup: (() => void) | null;
-    directory: string | null;
-  }>({
-    id: null,
-    cleanup: null,
-    directory: null
-  });
-
-  // Helper function to determine if a file is related to package management
-  const isPackageRelatedFile = (filePath: string): boolean => {
-    // More specific matching to avoid false positives
-    const packageFilePatterns = [
-      // Node.js
-      /(?:^|\/|\\)package\.json$/,
-      /(?:^|\/|\\)package-lock\.json$/,
-      /(?:^|\/|\\)yarn\.lock$/,
-      
-      // Python
-      /(?:^|\/|\\)requirements\.txt$/,
-      /(?:^|\/|\\)Pipfile$/,
-      /(?:^|\/|\\)Pipfile\.lock$/,
-      
-      // Rust
-      /(?:^|\/|\\)Cargo\.toml$/,
-      /(?:^|\/|\\)Cargo\.lock$/,
-      
-      // Go
-      /(?:^|\/|\\)go\.mod$/,
-      /(?:^|\/|\\)go\.sum$/,
-      
-      // Ruby
-      /(?:^|\/|\\)Gemfile$/,
-      /(?:^|\/|\\)Gemfile\.lock$/,
-      
-      // C#
-      /(?:^|\/|\\)[^\/\\]+\.csproj$/,
-      /(?:^|\/|\\)packages\.config$/
-    ];
-    
-    // Test the path against each pattern
-    return packageFilePatterns.some(pattern => pattern.test(filePath));
-  };
+  const { isLoading } = useAuthContext();
   
-  // Function to get the language associated with a package file
-  const getLanguageFromPackageFile = (filePath: string): string | null => {
-    // Map file patterns to languages
-    const packageFileToLanguage = [
-      // Node.js (JavaScript/TypeScript)
-      { pattern: /(?:^|\/|\\)package\.json$/, language: 'typescript' },
-      { pattern: /(?:^|\/|\\)package-lock\.json$/, language: 'typescript' },
-      { pattern: /(?:^|\/|\\)yarn\.lock$/, language: 'typescript' },
-      
-      // Python
-      { pattern: /(?:^|\/|\\)requirements\.txt$/, language: 'python' },
-      { pattern: /(?:^|\/|\\)Pipfile$/, language: 'python' },
-      { pattern: /(?:^|\/|\\)Pipfile\.lock$/, language: 'python' },
-      
-      // Rust
-      { pattern: /(?:^|\/|\\)Cargo\.toml$/, language: 'rust' },
-      { pattern: /(?:^|\/|\\)Cargo\.lock$/, language: 'rust' },
-      
-      // Go
-      { pattern: /(?:^|\/|\\)go\.mod$/, language: 'go' },
-      { pattern: /(?:^|\/|\\)go\.sum$/, language: 'go' },
-      
-      // Ruby
-      { pattern: /(?:^|\/|\\)Gemfile$/, language: 'ruby' },
-      { pattern: /(?:^|\/|\\)Gemfile\.lock$/, language: 'ruby' },
-      
-      // C#
-      { pattern: /(?:^|\/|\\)[^\/\\]+\.csproj$/, language: 'c#' },
-      { pattern: /(?:^|\/|\\)packages\.config$/, language: 'c#' }
-    ];
-    
-    // Find the first matching pattern and return the associated language
-    for (const { pattern, language } of packageFileToLanguage) {
-      if (pattern.test(filePath)) {
-        return language;
-      }
-    }
-    
-    return null;
-  };
+  // Initialize our custom hooks
+  const projectState = useProjectState();
+  const analysisState = useAnalysisState(projectState.selectedPath);
+  const languageState = useLanguageState(projectState.selectedPath, analysisState.filesByType);
+  const testGenerationState = useTestGenerationState(
+    projectState.selectedPath,
+    analysisState.updateFileTestStatus,
+    analysisState.setFileGenerationStatus
+  );
   
-  // Function to check all packages for detected languages
-  const checkAllPackages = useCallback(async () => {
-    if (detectedLanguages.size === 0) return;
-    
-    setPackageCheckStatus('checking');
-    
-    const updatedLanguages = new Map(detectedLanguages);
-    const newlyInstalled = new Set<string>();
-    
-    for (const [language, info] of updatedLanguages.entries()) {
+  // Initialize the agent from localStorage when the page loads
+  useEffect(() => {
+    const initAgent = async () => {
       try {
-        const isInstalled = await checkPackageInstallation(language);
-        
-        // Check if status changed from not installed to installed
-        if (info.installed === false && isInstalled === true) {
-          newlyInstalled.add(language);
+        // First check if the agent is already initialized
+        const isInitialized = await invoke("is_agent_initialized") as boolean;
+        if (isInitialized) {
+          console.log("Agent is already initialized");
+          return;
         }
         
-        updatedLanguages.set(language, { ...info, installed: isInstalled });
-      } catch (error) {
-        console.error(`Error checking packages for ${language}:`, error);
-      }
-    }
-    
-    setDetectedLanguages(updatedLanguages);
-    
-    // Set recently installed packages for animation
-    if (newlyInstalled.size > 0) {
-      setRecentlyInstalledPackages(newlyInstalled);
-      
-      // Clear the animation after a few seconds
-      setTimeout(() => {
-        setRecentlyInstalledPackages(new Set());
-      }, 3000);
-    }
-    
-    setPackageCheckStatus('complete');
-  }, [detectedLanguages]);
-
-  // Function to check a specific package
-  const checkSpecificPackage = useCallback(async (language: string) => {
-    if (!language || !detectedLanguages.has(language)) return;
-    
-    try {
-      const info = detectedLanguages.get(language)!;
-      const isInstalled = await checkPackageInstallation(language);
-      
-      // Check if status changed from not installed to installed
-      const wasNewlyInstalled = info.installed === false && isInstalled === true;
-      
-      // Update the language info with the new installation status
-      const updatedLanguages = new Map(detectedLanguages);
-      updatedLanguages.set(language, { ...info, installed: isInstalled });
-      setDetectedLanguages(updatedLanguages);
-      
-      // If newly installed, add to recently installed set for animation
-      if (wasNewlyInstalled) {
-        const newlyInstalled = new Set(recentlyInstalledPackages);
-        newlyInstalled.add(language);
-        setRecentlyInstalledPackages(newlyInstalled);
-        
-        // Clear the animation after a few seconds
-        setTimeout(() => {
-          setRecentlyInstalledPackages(prev => {
-            const updated = new Set(prev);
-            updated.delete(language);
-            return updated;
+        // If not initialized, try to initialize with the saved API key
+        const savedApiKey = localStorage.getItem("anthropic_api_key");
+        if (savedApiKey) {
+          console.log("Initializing agent with saved API key");
+          
+          // Direct invocation with camelCase parameter name
+          await invoke("initialize_agent", { 
+            apiKey: savedApiKey 
           });
-        }, 3000);
+          
+          console.log("Agent initialized successfully");
+        } else {
+          console.log("No API key found in localStorage");
+        }
+      } catch (error) {
+        console.error("Failed to initialize agent:", error);
+        // Show specific error details for debugging
+        if (error instanceof Error) {
+          console.error("Error message:", error.message);
+        } else {
+          console.error("Unknown error:", error);
+        }
       }
-      
-      return isInstalled;
-    } catch (error) {
-      console.error(`Error checking package for ${language}:`, error);
-      return false;
-    }
-  }, [detectedLanguages, recentlyInstalledPackages]);
-
-  // Create a stable debounce function that won't change on re-renders
-  const stableDebounce = useCallback((fn: Function, delay: number) => {
-    let timeoutId: NodeJS.Timeout | null = null;
-    return (...args: any[]) => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      timeoutId = setTimeout(() => {
-        fn(...args);
-        timeoutId = null;
-      }, delay);
     };
+    
+    initAgent();
   }, []);
-
-  // Stable version of the setupPackageWatcher function that doesn't recreate on re-renders
-  const setupPackageWatcher = useCallback(async (directory: string) => {
-    // Skip if we're already watching this directory
-    if (watcherRef.current.directory === directory && watcherRef.current.id) {
-      console.log(`Already watching directory: ${directory} with ID: ${watcherRef.current.id}`);
-      return watcherRef.current.cleanup;
-    }
+  
+  // Handle project selection
+  const handleProjectSelect = async (projectPath: string) => {
+    console.log("Project selected:", projectPath);
     
-    // Clean up any existing watcher first
-    if (watcherRef.current.cleanup) {
-      console.log(`Cleaning up previous watcher before setting up new one`);
-      watcherRef.current.cleanup();
-      watcherRef.current.cleanup = null;
-      watcherRef.current.id = null;
-    }
-    
-    console.log(`Setting up new watcher for directory: ${directory}`);
-    
-    try {
-      // Start a new watcher
-      const watchId = await invoke<string>('start_watching_directory', {
-        path: directory,
-        recursive: true
-      });
-      
-      console.log(`New watcher started with ID: ${watchId}`);
-      
-      // Update the state for UI purposes
-      setPackageWatcherId(watchId);
-      
-      // Update our ref
-      watcherRef.current.id = watchId;
-      watcherRef.current.directory = directory;
-      
-      // Set to track recently processed files to avoid duplicate processing
-      const recentlyProcessed = new Set<string>();
-      
-      // Create a handler function that won't change with re-renders
-      const debouncedHandler = (filePath: string, language: string) => {
-        const key = `${filePath}:${language}`;
-        
-        // Skip if already processed recently
-        if (recentlyProcessed.has(key)) {
+    // Validate the project path
+    if (!projectPath) {
+      console.error("Invalid project path");
+      toast.error("Invalid project path");
           return;
         }
         
-        // Mark as processed
-        recentlyProcessed.add(key);
-        
-        // Process the file change
-        console.log(`Processing package file change: ${filePath} (${language})`);
-        
-        // Check if the specific package is installed
-        checkSpecificPackage(language);
-        
-        // Remove from processed set after a delay
-        setTimeout(() => {
-          recentlyProcessed.delete(key);
-        }, 10000); // 10 second cooldown
-      };
-      
-      // Debounce the handler
-      const debouncedCheckPackage = _.debounce(debouncedHandler, 2000);
-      
-      // Set up the event listener
-      const unlisten = await listen('file-change', (event: any) => {
-        // Skip if this watcher is no longer current
-        if (watcherRef.current.id !== watchId) {
-          return;
-        }
-        
-        const { payload } = event;
-        
-        // Only process events from our watcher
-        if (payload.watch_id !== watchId) return;
-        
-        // Only process created or modified events
-        if (payload.kind !== 'created' && payload.kind !== 'modified') return;
-        
-        // Normalize path
-        const normalizedPath = payload.path.replace(/\\/g, '/');
-        
-        // Skip common directories that cause excessive events
-        const ignoredPatterns = [
-          /node_modules/,
-          /\.git/,
-          /\.vscode/,
-          /\.idea/,
-          /\.DS_Store/,
-          /\.next/,
-          /dist/,
-          /build/,
-          /target\/debug/,
-          /target\/release/,
-          /venv/,
-          /\.venv/
-        ];
-        
-        if (ignoredPatterns.some(pattern => pattern.test(normalizedPath))) {
-          return;
-        }
-        
-        // Check if this is a package file
-        if (isPackageRelatedFile(normalizedPath)) {
-          const language = getLanguageFromPackageFile(normalizedPath);
-          
-          if (language && detectedLanguages.has(language)) {
-            debouncedCheckPackage(normalizedPath, language);
-          }
-        }
-      });
-      
-      // Create cleanup function
-      const cleanup = () => {
-        console.log(`Cleaning up watcher: ${watchId}`);
-        
-        // Remove the event listener
-        unlisten();
-        
-        // Stop the watcher
-        if (watchId) {
-          invoke('stop_watching_directory', { watchId })
-            .then(() => console.log(`Successfully stopped watcher: ${watchId}`))
-            .catch(error => console.warn(`Error stopping watcher during cleanup: ${error}`));
-        }
-        
-        // Clear the ref if it still points to this watcher
-        if (watcherRef.current.id === watchId) {
-          watcherRef.current.id = null;
-          watcherRef.current.cleanup = null;
-          watcherRef.current.directory = null;
-          
-          // Also update the state
-          setPackageWatcherId(null);
-        }
-      };
-      
-      // Store the cleanup function in our ref
-      watcherRef.current.cleanup = cleanup;
-      
-      // Return the cleanup function
-      return cleanup;
-    } catch (error) {
-      console.error('Error setting up package watcher:', error);
-      
-      // Clear the ref on error
-      watcherRef.current.id = null;
-      watcherRef.current.cleanup = null;
-      watcherRef.current.directory = null;
-      
-      // Also update the state
-      setPackageWatcherId(null);
-      
-      return null;
-    }
-  }, [detectedLanguages, getLanguageFromPackageFile, isPackageRelatedFile, checkSpecificPackage]);
-
-  // Function to process analysis results
-  const processAnalysisResult = (result: FileAnalysisResult) => {
-    // Process the analysis results
-    const filesByType: FilesByType = {
-      components: [],
-      services: [],
-      utils: []
-    };
+    // Update project state
+    projectState.updateState({ selectedPath: projectPath });
     
-    let totalFiles = 0;
-    let filesWithTests = 0;
-    let filesWithoutTests = 0;
+    // Analyze the project
+    console.log("Analyzing project:", projectPath);
+    const result = await analysisState.analyzeProject(projectPath);
     
-    // Detect languages from the files
-    const languages = new Map<string, {
-      framework: string;
-      installCommand: string;
-      description: string;
-      installed?: boolean;
-    }>();
-    
-    // Process each source file
-    for (const [sourceFile, testFile] of Object.entries(result)) {
-      totalFiles++;
-      
-      const hasTest = testFile !== null;
-      if (hasTest) {
-        filesWithTests++;
-      } else {
-        filesWithoutTests++;
-      }
-      
-      // Categorize the file
-      const fileInfo = {
-        path: sourceFile,
-        hasTest,
-        testPath: testFile
-      };
-      
-      if (sourceFile.includes('/components/') || sourceFile.includes('\\components\\')) {
-        filesByType.components.push(fileInfo);
-      } else if (sourceFile.includes('/services/') || sourceFile.includes('\\services\\')) {
-        filesByType.services.push(fileInfo);
-      } else {
-        filesByType.utils.push(fileInfo);
-      }
-      
-      // Detect language
-      const { language, framework } = detectLanguageFromFile(sourceFile);
-      
-      if (language && !languages.has(language)) {
-        const recommendations = getTestingRecommendations(language);
-        languages.set(language, {
-          ...recommendations,
-          installed: undefined // Will be checked later
-        });
-      }
-    }
-    
-    // Update state with the processed data
-    setFilesByType(filesByType);
-    setStats({
-      total: totalFiles,
-      withTests: filesWithTests,
-      withoutTests: filesWithoutTests
-    });
-    
-    // Set detected languages
-    if (languages.size > 0) {
-      setDetectedLanguages(languages);
-      // Check installation status for all detected languages
-      checkAllPackages();
+    if (result) {
+      toast.success("Successfully loaded project at " + projectPath);
     }
   };
-
-  // Load saved directory on component mount - use a stable empty dependency array
-  // to ensure this only runs once
-  useEffect(() => {
-    console.log("Initial mount effect running");
-    let isMounted = true;
-    let cleanupWatcher: (() => void) | null = null;
-    
-    const initialize = async () => {
-      try {
-        // Check if agent is initialized
-        const isInitialized = await initializeAgentFromStorage();
-        if (!isMounted) return;
-        
-        setIsAgentInitialized(isInitialized);
-        
-        if (!isInitialized) {
-          setShowApiKeyModal(true);
-        }
-        
-        // Load saved directory if available
-        const savedDirectory = localStorage.getItem("selectedDirectory");
-        if (!savedDirectory || !isMounted) return;
-        
-        setSelectedDirectory(savedDirectory);
-        
-        // Analyze the directory
-        setIsAnalyzing(true);
-        setAnalysisError(null);
-        
-        try {
-          // Analyze the directory for source files and tests
-          const result = await invoke<FileAnalysisResult>("find_test_files", {
-            directory: savedDirectory
-          });
-          
-          if (!isMounted) return;
-          
-          processAnalysisResult(result);
-          
-          // Set up file watcher for package installation detection
-          cleanupWatcher = await setupPackageWatcher(savedDirectory);
-        } catch (error) {
-          if (!isMounted) return;
-          
-          console.error("Error analyzing directory:", error);
-          setAnalysisError(typeof error === 'string' ? error : 'Failed to analyze directory');
-        } finally {
-          if (isMounted) {
-            setIsAnalyzing(false);
-          }
-        }
-      } catch (error) {
-        if (isMounted) {
-          console.error("Error during initialization:", error);
-        }
-      }
-    };
-    
-    initialize();
-    
-    // Clean up function
-    return () => {
-      console.log("Cleanup from initial mount effect");
-      isMounted = false;
-      
-      if (cleanupWatcher) {
-        cleanupWatcher();
-      }
-    };
-  }, []); // Empty dependency array ensures this only runs once
-
-  // Function to handle directory selection - keep this separate from the initial load
-  const handleDirectorySelect = async (path: string) => {
-    console.log("Directory selected:", path);
-    setSelectedDirectory(path);
-    setAnalysisError(null);
-    setIsAnalyzing(true);
-    setFilesByType({ components: [], services: [], utils: [] });
-    setStats({ total: 0, withTests: 0, withoutTests: 0 });
-    setTestGenerationResults([]);
-    setShowResults(false);
-    setDetectedLanguages(new Map());
-    
-    // Save the selected directory to localStorage
-    localStorage.setItem("selectedDirectory", path);
-    
-    try {
-      // Call the Tauri command to analyze test files
-      const result = await invoke<FileAnalysisResult>("find_test_files", {
-        directory: path
-      });
-      
-      processAnalysisResult(result);
-      
-      // Set up a new watcher for the directory
-      await setupPackageWatcher(path);
-    } catch (error) {
-      console.error("Error analyzing directory:", error);
-      setAnalysisError(typeof error === 'string' ? error : 'Failed to analyze directory');
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  // Function to detect languages in the selected directory
-  const detectLanguagesInDirectory = useCallback(async () => {
-    if (!selectedDirectory) return;
-    
-    setPackageCheckStatus('checking');
-    const newDetectedLanguages = new Map<string, {
-      framework: string;
-      installCommand: string;
-      description: string;
-      installed?: boolean;
-    }>();
-    
-    // Get all files in the directory
-    const allFiles = [...filesByType.components, ...filesByType.services, ...filesByType.utils].map(file => file.path);
-    
-    // Detect languages from file extensions
-    for (const file of allFiles) {
-      const { language } = detectLanguageFromFile(file);
-      
-      if (language !== 'Unknown' && !newDetectedLanguages.has(language)) {
-        const recommendations = getTestingRecommendations(language);
-        newDetectedLanguages.set(language, {
-          ...recommendations,
-          installed: undefined // Will be checked later
-        });
-      }
-    }
-    
-    // Update state with detected languages
-    setDetectedLanguages(newDetectedLanguages);
-    
-    // Check if testing packages are installed for each language
-    if (newDetectedLanguages.size > 0) {
-      for (const [language, info] of newDetectedLanguages.entries()) {
-        try {
-          const isInstalled = await checkPackageInstallation(language);
-          newDetectedLanguages.set(language, {
-            ...info,
-            installed: isInstalled
-          });
-        } catch (error) {
-          console.error(`Error checking packages for ${language}:`, error);
-        }
-      }
-      
-      // Update state with installation status
-      setDetectedLanguages(new Map(newDetectedLanguages));
-    }
-    
-    setPackageCheckStatus('complete');
-  }, [selectedDirectory, filesByType]);
-
-  // Update detected languages when directory or files change
-  useEffect(() => {
-    if (selectedDirectory && stats.total > 0) {
-      detectLanguagesInDirectory();
-    }
-  }, [selectedDirectory, stats.total, detectLanguagesInDirectory]);
-
-  // Toggle selection of a file
-  const toggleFileSelection = (filePath: string) => {
-    const newSelected = new Set(selectedFiles);
-    if (newSelected.has(filePath)) {
-      newSelected.delete(filePath);
-    } else {
-      newSelected.add(filePath);
-    }
-    setSelectedFiles(newSelected);
-  };
-
-  // Generate tests for selected files
-  const generateTests = async () => {
-    console.log("Generating tests for:", Array.from(selectedFiles));
-    
-    if (selectedFiles.size === 0) return;
-    
-    // Check if the agent is initialized
-    try {
-      const initialized = await initializeAgentFromStorage();
-      if (!initialized) {
-        alert("Please set your Anthropic API key in Settings before generating tests.");
-        return;
-      }
-    } catch (error) {
-      console.error("Failed to initialize agent:", error);
-      alert("Failed to initialize agent. Please try again.");
+  
+  // Handle test generation for selected files
+  const handleGenerateTests = async () => {
+    if (analysisState.selectedFiles.size === 0) {
+      toast.error("Please select files to generate tests for");
       return;
     }
     
-    setIsGeneratingTests(true);
-    setTestGenerationResults([]);
-    setShowResults(false);
+    // Check if we have an API key set
+    const savedApiKey = localStorage.getItem("anthropic_api_key");
+    if (!savedApiKey) {
+      // If no API key is set, show an error and redirect to settings
+      toast.error("Please set an Anthropic API key in Settings before generating tests");
+      setShowApiKeyModal(true);
+      return;
+    }
     
-    // Create a copy of the selected files to avoid issues with state updates
-    const filesToProcess = Array.from(selectedFiles);
-    
-    // Track the results
-    const results: { file: string; success: boolean; testPath?: string; error?: string }[] = [];
-    
-    // Check for language support and provide recommendations
-    const languageMap = new Map<string, { framework: string; installCommand: string }>();
-    const unsupportedFiles: string[] = [];
-    
-    // First pass: check languages and collect recommendations
-    for (const file of filesToProcess) {
-      const { language, framework } = detectLanguageFromFile(file);
-      
-      if (language === 'Unknown') {
-        unsupportedFiles.push(file);
-        results.push({
-          file,
-          success: false,
-          error: `Unsupported file type: ${file.split('.').pop()}`
-        });
-        continue;
-      }
-      
-      if (!languageMap.has(language)) {
-        const recommendations = getTestingRecommendations(language);
-        languageMap.set(language, {
-          framework: recommendations.framework,
-          installCommand: recommendations.installCommand
-        });
+    // Get the selected files
+    const selectedFiles = [];
+    for (const category of ['components', 'services', 'utils'] as const) {
+      for (const file of analysisState.filesByType[category]) {
+        if (analysisState.selectedFiles.has(file.path)) {
+          selectedFiles.push(file);
+        }
       }
     }
     
-    // Show recommendations for testing frameworks
-    if (languageMap.size > 0) {
-      let recommendationMessage = "Recommended testing frameworks for your files:\n\n";
+    try {
+      // Generate tests
+      await testGenerationState.generateTests(selectedFiles);
       
-      languageMap.forEach((value, language) => {
-        recommendationMessage += `${language}: ${value.framework}\n`;
-        recommendationMessage += `Install with: ${value.installCommand}\n\n`;
-      });
+      // Check if we have successful test results, regardless of errors
+      const successfulTests = Array.from(testGenerationState.results.values())
+        .filter(result => result.success);
       
-      // Just log recommendations instead of showing a modal to avoid blocking the UI
-      console.info(recommendationMessage);
-    }
-    
-    // Show warning for unsupported files
-    if (unsupportedFiles.length > 0) {
-      const warningMessage = `Warning: ${unsupportedFiles.length} file(s) have unsupported extensions and will be skipped.`;
-      console.warn(warningMessage);
-      alert(warningMessage);
-    }
-    
-    // Process each supported file
-    for (const file of filesToProcess) {
-      // Skip files we already identified as unsupported
-      if (unsupportedFiles.includes(file)) {
-        continue;
+      // If we have successful results, show success message
+      if (successfulTests.length > 0) {
+        toast.success(`Generated ${successfulTests.length} test${successfulTests.length === 1 ? '' : 's'} successfully`);
       }
       
-      try {
-        const { language, framework } = detectLanguageFromFile(file);
-        
-        // Generate and write the test
-        const testPath = await invoke('generate_and_write_test', {
-          directory: selectedDirectory,
-          sourceFile: file,
-          language,
-          testFramework: framework
-        }) as string;
-        
-        results.push({
-          file,
-          success: true,
-          testPath
-        });
-        
-        console.log(`Generated test for ${file} at ${testPath}`);
-      } catch (error) {
-        console.error(`Failed to generate test for ${file}:`, error);
-        results.push({
-          file,
-          success: false,
-          error: String(error)
-        });
+      // Only show API key error if no tests were generated
+      if (testGenerationState.error && 
+          testGenerationState.error.includes("API key") &&
+          successfulTests.length === 0) {
+        setApiKeyError(testGenerationState.error);
+        setShowApiKeyModal(true);
+        return;
+      }
+    } catch (error) {
+      // If the error is related to API key, show the API key modal
+      const errorMessage = String(error);
+      if (errorMessage.includes("API key") || errorMessage.includes("not been initialized")) {
+        setApiKeyError(errorMessage);
+        setShowApiKeyModal(true);
+      } else {
+        toast.error(`Error generating tests: ${errorMessage}`);
       }
     }
+  };
+  
+  // Calculate stats from filesByType
+  const stats = {
+    total: analysisState.filesByType.components.length + 
+           analysisState.filesByType.services.length + 
+           analysisState.filesByType.utils.length,
+    withTests: analysisState.filesByType.components.filter(f => f.hasTest).length + 
+               analysisState.filesByType.services.filter(f => f.hasTest).length + 
+               analysisState.filesByType.utils.filter(f => f.hasTest).length,
+    withoutTests: analysisState.filesByType.components.filter(f => !f.hasTest).length + 
+                  analysisState.filesByType.services.filter(f => !f.hasTest).length + 
+                  analysisState.filesByType.utils.filter(f => !f.hasTest).length
+  };
+  
+  // Convert test generation results to the format expected by TestFileAnalysis
+  const testGenerationResults = Array.from(testGenerationState.results.entries()).map(([filePath, result]) => ({
+    file: filePath,
+    success: result.success,
+    testPath: result.testPath,
+    error: result.message
+  }));
+  
+  // Render file list for a category (simplified version)
+  const renderFileList = (category: 'components' | 'services' | 'utils') => {
+    const files = analysisState.filesByType[category];
     
-    // Update the UI with the results
-    setTestGenerationResults(results);
-    setShowResults(true);
-    setIsGeneratingTests(false);
+    if (files.length === 0) {
+      return (
+        <div className="flex items-center justify-center h-20 text-muted-foreground">
+          No {category} found
+        </div>
+      );
+    }
     
-    // Refresh the file analysis to show the new test files
-    handleDirectorySelect(selectedDirectory);
+    return (
+      <div className="space-y-2">
+        {files.map((file) => (
+          <div
+            key={file.path}
+            className={`flex items-center justify-between p-2 rounded-md ${
+              analysisState.selectedFiles.has(file.path) ? "bg-muted" : ""
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id={file.path}
+                checked={analysisState.selectedFiles.has(file.path)}
+                onCheckedChange={() => analysisState.toggleFileSelection(file.path)}
+                disabled={file.hasTest || file.isGenerating}
+              />
+              <Label
+                htmlFor={file.path}
+                className={`flex items-center gap-2 ${file.hasTest ? "text-muted-foreground" : ""}`}
+              >
+                <Loader2 className={`h-4 w-4 ${file.isGenerating ? "animate-spin" : "hidden"}`} />
+                <span>{file.name}</span>
+              </Label>
+            </div>
+            <div className="flex items-center gap-2">
+              {file.isGenerating ? (
+                <Badge variant="outline" className="animate-pulse">
+                  Generating...
+                </Badge>
+              ) : file.hasTest ? (
+                <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+                  <CheckCircleIcon className="h-3 w-3 mr-1" />
+                  Tested
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
+                  <XCircleIcon className="h-3 w-3 mr-1" />
+                  No Test
+                </Badge>
+              )}
+              {file.language && (
+                <Badge variant="outline" className="text-xs">
+                  {file.language}
+                </Badge>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
   };
 
   return (
@@ -802,280 +329,279 @@ export default function HomePage() {
       )}
       
       <div className="grid grid-cols-1 gap-6">
-        <FolderSelector onDirectorySelect={handleDirectorySelect} initialDirectory={selectedDirectory} />
-        
-        {selectedDirectory && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Detected Languages & Testing Frameworks</CardTitle>
-              <CardDescription>
-                Languages detected in your project and recommended testing frameworks
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col space-y-4">
-                {packageCheckStatus === 'checking' ? (
-                  <div className="flex items-center space-x-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Analyzing project languages...</span>
-                  </div>
-                ) : detectedLanguages.size === 0 ? (
-                  <div className="text-gray-500">
-                    No languages detected. Select a directory with source files.
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {Array.from(detectedLanguages.entries()).map(([language, info]) => (
-                      <div 
-                        key={language} 
-                        className={`border rounded-md p-4 ${
-                          info.installed === true 
-                            ? 'border-green-200 bg-green-50' 
-                            : info.installed === false 
-                              ? 'border-amber-200 bg-amber-50'
-                              : 'border-gray-200'
-                        }`}
-                      >
-                        <div className="flex justify-between items-center mb-2">
-                          <h3 className="font-medium">{language}</h3>
-                          <div className="flex items-center gap-2">
-                            {info.installed === true ? (
-                              <Badge variant="outline" className={`bg-green-100 text-green-800 border-green-200 ${
-                                recentlyInstalledPackages.has(language) ? 'transition-all duration-300 animate-pulse' : ''
-                              }`}>
-                                <CheckCircle className="mr-1 h-3 w-3" /> Installed
-                              </Badge>
-                            ) : info.installed === false ? (
-                              <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-200">
-                                <AlertCircle className="mr-1 h-3 w-3" /> Not Installed
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline">
-                                <Loader2 className="mr-1 h-3 w-3 animate-spin" /> Checking...
-                              </Badge>
-                            )}
-                            <Badge variant="outline">{info.framework}</Badge>
-                          </div>
-                        </div>
-                        <p className="text-sm text-gray-600 mb-2">{info.description}</p>
-                        <div className={`p-2 rounded text-sm font-mono ${
-                          info.installed === false ? 'bg-amber-100' : 'bg-gray-50'
-                        }`}>
-                          {info.installCommand}
-                        </div>
-                        {info.installed === false && (
-                          <div className="mt-2 text-sm text-amber-700">
-                            Install the testing framework to generate tests for {language} files.
-                          </div>
-                        )}
-                        {info.installed === true && (
-                          <div className="mt-2 text-sm text-green-700">
-                            Testing framework is installed and ready to use!
-                          </div>
-                        )}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="flex flex-col gap-4">
+            <ProjectSelector
+              onProjectSelect={handleProjectSelect}
+              initialProject={projectState.selectedPath || undefined}
+            />
+          </div>
+          
+          {analysisState.isAnalyzing ? (
+            <Card className="h-full">
+              <CardHeader className="pb-2">
+                <CardTitle>Analyzing Files</CardTitle>
+                <CardDescription>
+                  Scanning project for test files
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center space-x-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Analyzing directory for test files...</span>
+                </div>
+              </CardContent>
+            </Card>
+          ) : projectState.selectedPath && languageState.detectedLanguages.size > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Detected Languages</CardTitle>
+                <CardDescription>
+                  Languages detected in your project and their testing frameworks
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {Array.from(languageState.detectedLanguages.entries()).map(([language, info]) => (
+                    <div key={language} className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="font-medium">{language}</div>
+                        <Badge
+                          variant="outline"
+                          className={`${
+                            info.installed
+                              ? "bg-green-50 text-green-700 border-green-200"
+                              : "bg-amber-50 text-amber-700 border-amber-200"
+                          } ${
+                            languageState.recentlyInstalled.has(language)
+                              ? "animate-pulse"
+                              : ""
+                          }`}
+                        >
+                          {info.installed ? "Installed" : "Not Installed"}
+                        </Badge>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+                      <div className="text-sm text-muted-foreground">
+                        {info.framework}
+                      </div>
+                      <div className="text-xs bg-muted p-2 rounded-md font-mono">
+                        {info.installCommand}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+              <CardContent className="pt-0">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => languageState.detectLanguages()}
+                  disabled={languageState.checkStatus === 'checking'}
+                >
+                  <RefreshCwIcon className={`h-4 w-4 mr-2 ${languageState.checkStatus === 'checking' ? 'animate-spin' : ''}`} />
+                  Refresh
+                </Button>
+              </CardContent>
+            </Card>
+          ) : projectState.selectedPath && languageState.checkStatus === 'checking' ? (
+            <Card className="h-full">
+              <CardHeader className="pb-2">
+                <CardTitle>Languages & Frameworks</CardTitle>
+                <CardDescription>
+                  Detecting languages in your project
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center space-x-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Analyzing project languages...</span>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+        </div>
         
-        {isAnalyzing && (
-          <Card>
-            <CardContent className="flex items-center justify-center p-6">
-              <Loader2 className="h-8 w-8 animate-spin mr-2" />
-              <p>Analyzing directory for test files...</p>
-            </CardContent>
-          </Card>
-        )}
-        
-        {analysisError && (
+        {analysisState.error && (
           <Card className="border-red-300 bg-red-50">
             <CardContent className="p-4">
               <div className="flex items-center text-red-600">
                 <AlertCircle className="h-5 w-5 mr-2" />
-                <p>{analysisError}</p>
+                <p>{analysisState.error}</p>
               </div>
             </CardContent>
           </Card>
         )}
         
-        {!isAnalyzing && !analysisError && selectedDirectory && (
+        {!analysisState.isAnalyzing && !analysisState.error && projectState.selectedPath && (
           <Card>
             <CardHeader>
-              <CardTitle>Test File Analysis</CardTitle>
+              <CardTitle>Project Files</CardTitle>
               <CardDescription>
-                Files in your project and their test coverage status.
+                Select files to generate tests for
               </CardDescription>
-              <div className="flex gap-2 mt-2">
-                <Badge variant="outline" className="bg-green-50">
-                  {stats.withTests} files with tests
-                </Badge>
-                <Badge variant="outline" className="bg-yellow-50">
-                  {stats.withoutTests} files without tests
-                </Badge>
-              </div>
             </CardHeader>
             <CardContent>
-              <Tabs defaultValue="components">
-                <TabsList className="mb-4">
-                  <TabsTrigger value="components">Components ({filesByType.components.length})</TabsTrigger>
-                  <TabsTrigger value="services">Services ({filesByType.services.length})</TabsTrigger>
-                  <TabsTrigger value="utils">Utilities ({filesByType.utils.length})</TabsTrigger>
-                </TabsList>
-                
-                <TabsContent value="components" className="space-y-4">
-                  {filesByType.components.length === 0 ? (
-                    <p className="text-center text-gray-500 py-4">No component files found</p>
-                  ) : (
-                    filesByType.components.map((file, i) => (
-                      <div key={i} className="flex items-center p-2 border rounded hover:bg-gray-50">
-                        <input 
-                          type="checkbox" 
-                          id={`component-${i}`} 
-                          className="mr-3 h-4 w-4" 
-                          checked={selectedFiles.has(file.path)}
-                          onChange={() => toggleFileSelection(file.path)}
-                          disabled={file.hasTest}
-                        />
-                        <label htmlFor={`component-${i}`} className="flex-1 cursor-pointer">
-                          {file.path.split('/').pop() || file.path.split('\\').pop()}
-                        </label>
-                        {file.hasTest ? (
-                          <div className="flex items-center text-green-600">
-                            <CheckCircle className="h-4 w-4 mr-1" />
-                            <span className="text-sm">Has test</span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center text-yellow-600">
-                            <AlertCircle className="h-4 w-4 mr-1" />
-                            <span className="text-sm">No test</span>
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </TabsContent>
-                
-                <TabsContent value="services" className="space-y-4">
-                  {filesByType.services.length === 0 ? (
-                    <p className="text-center text-gray-500 py-4">No service files found</p>
-                  ) : (
-                    filesByType.services.map((file, i) => (
-                      <div key={i} className="flex items-center p-2 border rounded hover:bg-gray-50">
-                        <input 
-                          type="checkbox" 
-                          id={`service-${i}`} 
-                          className="mr-3 h-4 w-4" 
-                          checked={selectedFiles.has(file.path)}
-                          onChange={() => toggleFileSelection(file.path)}
-                          disabled={file.hasTest}
-                        />
-                        <label htmlFor={`service-${i}`} className="flex-1 cursor-pointer">
-                          {file.path.split('/').pop() || file.path.split('\\').pop()}
-                        </label>
-                        {file.hasTest ? (
-                          <div className="flex items-center text-green-600">
-                            <CheckCircle className="h-4 w-4 mr-1" />
-                            <span className="text-sm">Has test</span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center text-yellow-600">
-                            <AlertCircle className="h-4 w-4 mr-1" />
-                            <span className="text-sm">No test</span>
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </TabsContent>
-                
-                <TabsContent value="utils" className="space-y-4">
-                  {filesByType.utils.length === 0 ? (
-                    <p className="text-center text-gray-500 py-4">No utility files found</p>
-                  ) : (
-                    filesByType.utils.map((file, i) => (
-                      <div key={i} className="flex items-center p-2 border rounded hover:bg-gray-50">
-                        <input 
-                          type="checkbox" 
-                          id={`util-${i}`} 
-                          className="mr-3 h-4 w-4" 
-                          checked={selectedFiles.has(file.path)}
-                          onChange={() => toggleFileSelection(file.path)}
-                          disabled={file.hasTest}
-                        />
-                        <label htmlFor={`util-${i}`} className="flex-1 cursor-pointer">
-                          {file.path.split('/').pop() || file.path.split('\\').pop()}
-                        </label>
-                        {file.hasTest ? (
-                          <div className="flex items-center text-green-600">
-                            <CheckCircle className="h-4 w-4 mr-1" />
-                            <span className="text-sm">Has test</span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center text-yellow-600">
-                            <AlertCircle className="h-4 w-4 mr-1" />
-                            <span className="text-sm">No test</span>
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </TabsContent>
-              </Tabs>
-              
-              <div className="mt-6">
-                <Button 
-                  disabled={selectedFiles.size === 0 || isGeneratingTests} 
-                  onClick={generateTests}
-                  className="w-full"
-                >
-                  {isGeneratingTests ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Generating Tests...
-                    </>
-                  ) : (
-                    `Generate Tests for ${selectedFiles.size} Selected ${selectedFiles.size === 1 ? 'File' : 'Files'}`
-                  )}
-                </Button>
-              </div>
-              
-              {showResults && testGenerationResults.length > 0 && (
-                <div className="mt-4">
-                  <h3 className="text-lg font-medium mb-2">Test Generation Results</h3>
-                  <div className="space-y-2">
-                    {testGenerationResults.map((result, index) => (
-                      <div 
-                        key={index} 
-                        className={`p-3 rounded ${result.success ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}
-                      >
-                        <div className="flex items-start">
-                          {result.success ? (
-                            <CheckCircle className="h-5 w-5 text-green-500 mr-2 flex-shrink-0 mt-0.5" />
-                          ) : (
-                            <AlertCircle className="h-5 w-5 text-red-500 mr-2 flex-shrink-0 mt-0.5" />
-                          )}
-                          <div>
-                            <div className="font-medium">{result.file}</div>
-                            {result.success ? (
-                              <div className="text-sm text-green-700">
-                                Test created at: {result.testPath}
-                              </div>
-                            ) : (
-                              <div className="text-sm text-red-700">
-                                Error: {result.error}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+              <div className="mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm font-medium">Files Summary</div>
+                  <div className="flex gap-2">
+                    <Badge variant="outline">{stats.total} Total</Badge>
+                    <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+                      {stats.withTests} With Tests
+                    </Badge>
+                    <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
+                      {stats.withoutTests} Without Tests
+                    </Badge>
                   </div>
                 </div>
-              )}
+              </div>
+              
+              <Tabs defaultValue="components">
+                <TabsList className="mb-4">
+                  <TabsTrigger value="components">Components</TabsTrigger>
+                  <TabsTrigger value="services">Services</TabsTrigger>
+                  <TabsTrigger value="utils">Utilities</TabsTrigger>
+                </TabsList>
+                <ScrollArea className="h-[400px]">
+                  <TabsContent value="components">
+                    {renderFileList('components')}
+                  </TabsContent>
+                  <TabsContent value="services">
+                    {renderFileList('services')}
+                  </TabsContent>
+                  <TabsContent value="utils">
+                    {renderFileList('utils')}
+                  </TabsContent>
+                </ScrollArea>
+              </Tabs>
+            </CardContent>
+            <CardContent className="pt-0 flex justify-between">
+              <div className="flex items-center gap-2">
+                <Button 
+                  variant="outline"
+                  size="sm"
+                  onClick={analysisState.selectAllFilesWithoutTests}
+                  disabled={analysisState.isAnalyzing}
+                >
+                  Select All Without Tests
+                </Button>
+                <Button 
+                  variant="outline"
+                  size="sm"
+                  onClick={analysisState.clearFileSelection}
+                  disabled={analysisState.isAnalyzing || analysisState.selectedFiles.size === 0}
+                >
+                  Clear Selection
+                </Button>
+              </div>
+              <Button
+                onClick={handleGenerateTests}
+                disabled={
+                  analysisState.isAnalyzing ||
+                  analysisState.selectedFiles.size === 0 ||
+                  testGenerationState.isGenerating
+                }
+              >
+                {testGenerationState.isGenerating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <CodeIcon className="h-4 w-4 mr-2" />
+                    Generate Tests
+                  </>
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+        
+        {/* Test Generation Progress */}
+        {testGenerationState.isGenerating && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Test Generation Progress</CardTitle>
+              <CardDescription>
+                Generating tests for selected files
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <Progress value={testGenerationState.progress} />
+                <div className="text-center">
+                  {testGenerationState.currentFile ? (
+                    <span>
+                      Generating test for{" "}
+                      <span className="font-medium">
+                        {testGenerationState.currentFile.split("/").pop()}
+                      </span>
+                    </span>
+                  ) : (
+                    <span>Preparing test generation...</span>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+            <CardContent className="pt-0">
+              <Button
+                variant="outline"
+                onClick={testGenerationState.cancelGeneration}
+              >
+                Cancel
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+        
+        {/* Test Generation Results */}
+        {!testGenerationState.isGenerating && testGenerationState.results.size > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Test Generation Results</CardTitle>
+              <CardDescription>
+                Results of the test generation process
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ScrollArea className="h-[200px]">
+                <div className="space-y-2">
+                  {testGenerationResults.map((result) => (
+                    <div
+                      key={result.file}
+                      className={`flex items-center justify-between p-2 rounded-md ${
+                        result.success ? "bg-green-50" : "bg-red-50"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span>{result.file.split("/").pop()}</span>
+                      </div>
+                      <div>
+                        {result.success ? (
+                          <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+                            <CheckCircleIcon className="h-3 w-3 mr-1" />
+                            Success
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
+                            <XCircleIcon className="h-3 w-3 mr-1" />
+                            Failed
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </CardContent>
+            <CardContent className="pt-0">
+              <Button
+                variant="outline"
+                onClick={testGenerationState.clearResults}
+              >
+                Clear Results
+              </Button>
             </CardContent>
           </Card>
         )}
@@ -1108,6 +634,8 @@ export default function HomePage() {
           </div>
         </div>
       )}
+      
+      <Toaster />
     </div>
   );
 }

@@ -101,6 +101,22 @@ impl AgentService {
         let lock = self.claude.lock().await;
         
         if let Some(claude) = &*lock {
+            // Language-specific guidance for test generation
+            let language_guidance = match language.to_lowercase().as_str() {
+                "javascript" | "typescript" => {
+                    "Use Jest for testing. Include proper imports and describe/it blocks."
+                },
+                "python" => {
+                    "Use pytest for testing. Include proper imports and test_ prefixed functions."
+                },
+                "rust" => {
+                    "Use Rust's built-in testing framework with #[test] annotations. Include proper modules and use statements."
+                },
+                _ => {
+                    "Follow best practices for the language's standard testing framework."
+                }
+            };
+            
             // Create a specialized system prompt for test generation
             let system_prompt = format!(
                 r#"You are a specialized test generation agent. Your task is to analyze the code provided and generate comprehensive test cases.
@@ -110,6 +126,7 @@ Follow these guidelines:
 2. Include tests for edge cases and error handling
 3. Ensure the tests are well-organized and commented
 4. Use {}{}
+5. {}
 
 Respond ONLY with the generated test code, without explanations or commentary outside the code."#,
                 language,
@@ -117,7 +134,8 @@ Respond ONLY with the generated test code, without explanations or commentary ou
                     format!(" and the {} testing framework", framework)
                 } else {
                     " best practices for testing".to_string()
-                }
+                },
+                language_guidance
             );
 
             let prompt = message_formatter![

@@ -119,3 +119,71 @@ pub fn list_directory_files(directory_path: String) -> Result<Vec<FileInfo>, Str
     info!("Found {} files in directory", files.len());
     Ok(files)
 }
+
+/// Command to list only directories in a given path
+/// Returns a list of directory paths
+#[tauri::command]
+pub fn list_directories(path: String) -> Result<Vec<String>, String> {
+    info!("Listing directories in: {}", path);
+
+    let dir_path = Path::new(&path);
+    if !dir_path.exists() {
+        return Err(format!("Directory does not exist: {}", path));
+    }
+
+    if !dir_path.is_dir() {
+        return Err(format!("Path is not a directory: {}", path));
+    }
+
+    let entries = match fs::read_dir(dir_path) {
+        Ok(entries) => entries,
+        Err(e) => return Err(format!("Failed to read directory: {}", e)),
+    };
+
+    let mut directories = Vec::new();
+
+    for entry in entries {
+        match entry {
+            Ok(entry) => {
+                let file_path = entry.path();
+                
+                // Skip hidden directories (starting with .)
+                if let Some(file_name) = file_path.file_name() {
+                    if let Some(name_str) = file_name.to_str() {
+                        if name_str.starts_with(".") {
+                            continue;
+                        }
+                    }
+                }
+                
+                // Check if it's a directory
+                if file_path.is_dir() {
+                    // Convert to absolute path if it's not already
+                    let absolute_path = if file_path.is_absolute() {
+                        file_path
+                    } else {
+                        if let Ok(abs_path) = fs::canonicalize(&file_path) {
+                            abs_path
+                        } else {
+                            file_path
+                        }
+                    };
+                    
+                    // Add to the list of directories
+                    directories.push(absolute_path.to_string_lossy().to_string());
+                }
+            }
+            Err(_) => continue, // Skip entries we can't read
+        }
+    }
+
+    // Sort directories alphabetically
+    directories.sort_by(|a, b| {
+        let a_name = Path::new(a).file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let b_name = Path::new(b).file_name().and_then(|n| n.to_str()).unwrap_or("");
+        a_name.to_lowercase().cmp(&b_name.to_lowercase())
+    });
+
+    info!("Found {} directories in {}", directories.len(), path);
+    Ok(directories)
+}
